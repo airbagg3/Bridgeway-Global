@@ -1,0 +1,40 @@
+{
+  "entities": {
+    "Post": {
+      "title": "Post",
+      "description": "A blog post or news item",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The title of the post" },
+        "content": { "type": "string", "description": "The main content of the post" },
+        "category": { "type": "string", "description": "The category of the post" },
+        "image_url": { "type": "string", "description": "URL of the post image" },
+        "created_at": { "type": "string", "format": "date-time", "description": "When the post was created" }
+      },
+      "required": ["title", "content", "category"]
+    },
+    "Consultation": {
+      "title": "Consultation",
+      "description": "A consultation request from a user",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "The subject of the consultation" },
+        "contact": { "type": "string", "description": "Contact number" },
+        "email": { "type": "string", "description": "Email address" },
+        "content": { "type": "string", "description": "The message content" },
+        "created_at": { "type": "string", "format": "date-time", "description": "When the request was submitted" }
+      },
+      "required": ["title", "contact", "email", "content"]
+    }
+  },
+  "firestore": {
+    "/posts/{postId}": {
+      "schema": "Post",
+      "description": "Collection of blog posts"
+    },
+    "/consultations/{consultationId}": {
+      "schema": "Consultation",
+      "description": "Collection of consultation requests"
+    }
+  }
+}

@@ -1,44 +1,58 @@
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
-import Database from "better-sqlite3";
 import * as jwtModule from "jsonwebtoken";
 const jwt: any = (jwtModule as any).default || jwtModule;
 const sign = jwt.sign;
 const verify = jwt.verify;
 import cookieParser from "cookie-parser";
+import * as admin from "firebase-admin";
+import firebaseConfig from "./firebase-applet-config.json";
 
-const db = new Database("database.sqlite");
+// Initialize Firebase Admin
+if (!admin.apps.length) {
+  admin.initializeApp({
+    projectId: firebaseConfig.projectId,
+  });
+}
+
+const db = admin.firestore();
+// Set the database ID if provided in config
+if ((firebaseConfig as any).firestoreDatabaseId && (firebaseConfig as any).firestoreDatabaseId !== '(default)') {
+  // Note: In some versions of firebase-admin, you might need to use a different way to set databaseId
+  // For now, we assume the default or that projectId is enough for the default database.
+}
+
 const JWT_SECRET = process.env.JWT_SECRET || "bridgeway-secret-key-2024";
 
-// Initialize database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS posts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    content TEXT NOT NULL,
-    category TEXT NOT NULL,
-    image_url TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS consultations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    contact TEXT NOT NULL,
-    email TEXT NOT NULL,
-    content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-`);
-
 // Seed data if empty
-const count = db.prepare("SELECT COUNT(*) as count FROM posts").get() as { count: number };
-if (count.count === 0) {
-  const insert = db.prepare("INSERT INTO posts (title, content, category, image_url) VALUES (?, ?, ?, ?)");
-  insert.run("글로벌 공급망 다변화 전략", "최근 글로벌 공급망의 변화에 따른 대응 전략을 소개합니다.", "무역 뉴스", "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=800");
-  insert.run("2024년 수출입 통계 분석", "올해의 주요 수출입 품목 및 국가별 통계를 분석합니다.", "공지사항", "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&q=80&w=800");
+async function seedData() {
+  try {
+    const postsCol = db.collection("posts");
+    const snapshot = await postsCol.limit(1).get();
+    if (snapshot.empty) {
+      console.log("Seeding initial posts...");
+      await postsCol.add({
+        title: "글로벌 공급망 다변화 전략",
+        content: "최근 글로벌 공급망의 변화에 따른 대응 전략을 소개합니다.",
+        category: "무역 뉴스",
+        image_url: "https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&q=80&w=800",
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+      });
+      await postsCol.add({
+        title: "2024년 수출입 통계 분석",
+        content: "올해의 주요 수출입 품목 및 국가별 통계를 분석합니다.",
+        category: "공지사항",
+        image_url: "https://images.unsplash.com/photo-1460925895917-afdab827c52f?auto=format&fit=crop&q=80&w=800",
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+      });
+    }
+  } catch (error) {
+    console.error("Error seeding data:", error);
+  }
 }
+
+seedData();
 
 async function startServer() {
   const app = express();
@@ -125,40 +139,92 @@ async function startServer() {
     });
   });
 
-  app.get("/api/posts", (req, res) => {
-    const posts = db.prepare("SELECT * FROM posts ORDER BY created_at DESC").all();
-    res.json(posts);
+  app.get("/api/posts", async (req, res) => {
+    try {
+      const snapshot = await db.collection("posts").orderBy("created_at", "desc").get();
+      const posts = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        created_at: doc.data().created_at?.toDate?.() || doc.data().created_at
+      }));
+      res.json(posts);
+    } catch (error) {
+      console.error("Error fetching posts:", error);
+      res.status(500).json({ message: "게시글을 불러오는 중 오류가 발생했습니다." });
+    }
   });
 
   // Consultation Routes
-  app.post("/api/consultations", (req, res) => {
-    const { title, contact, email, content } = req.body;
-    if (!title || !contact || !email || !content) {
-      return res.status(400).json({ message: "모든 필드를 입력해주세요." });
+  app.post("/api/consultations", async (req, res) => {
+    try {
+      const { title, contact, email, content } = req.body;
+      if (!title || !contact || !email || !content) {
+        return res.status(400).json({ message: "모든 필드를 입력해주세요." });
+      }
+      const docRef = await db.collection("consultations").add({
+        title,
+        contact,
+        email,
+        content,
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+      });
+      res.json({ id: docRef.id });
+    } catch (error) {
+      console.error("Error creating consultation:", error);
+      res.status(500).json({ message: "상담 신청 중 오류가 발생했습니다." });
     }
-    const info = db.prepare("INSERT INTO consultations (title, contact, email, content) VALUES (?, ?, ?, ?)").run(title, contact, email, content);
-    res.json({ id: info.lastInsertRowid });
   });
 
-  app.get("/api/consultations", authenticateToken, (req, res) => {
-    const consultations = db.prepare("SELECT * FROM consultations ORDER BY created_at DESC").all();
-    res.json(consultations);
+  app.get("/api/consultations", authenticateToken, async (req, res) => {
+    try {
+      const snapshot = await db.collection("consultations").orderBy("created_at", "desc").get();
+      const consultations = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+        created_at: doc.data().created_at?.toDate?.() || doc.data().created_at
+      }));
+      res.json(consultations);
+    } catch (error) {
+      console.error("Error fetching consultations:", error);
+      res.status(500).json({ message: "상담 내역을 불러오는 중 오류가 발생했습니다." });
+    }
   });
 
-  app.delete("/api/consultations/:id", authenticateToken, (req, res) => {
-    db.prepare("DELETE FROM consultations WHERE id = ?").run(req.params.id);
-    res.json({ success: true });
+  app.delete("/api/consultations/:id", authenticateToken, async (req, res) => {
+    try {
+      await db.collection("consultations").doc(req.params.id).delete();
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting consultation:", error);
+      res.status(500).json({ message: "상담 내역 삭제 중 오류가 발생했습니다." });
+    }
   });
 
-  app.post("/api/posts", authenticateToken, (req, res) => {
-    const { title, content, category, image_url } = req.body;
-    const info = db.prepare("INSERT INTO posts (title, content, category, image_url) VALUES (?, ?, ?, ?)").run(title, content, category, image_url);
-    res.json({ id: info.lastInsertRowid });
+  app.post("/api/posts", authenticateToken, async (req, res) => {
+    try {
+      const { title, content, category, image_url } = req.body;
+      const docRef = await db.collection("posts").add({
+        title,
+        content,
+        category,
+        image_url,
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+      });
+      res.json({ id: docRef.id });
+    } catch (error) {
+      console.error("Error creating post:", error);
+      res.status(500).json({ message: "게시글 작성 중 오류가 발생했습니다." });
+    }
   });
 
-  app.delete("/api/posts/:id", authenticateToken, (req, res) => {
-    db.prepare("DELETE FROM posts WHERE id = ?").run(req.params.id);
-    res.json({ success: true });
+  app.delete("/api/posts/:id", authenticateToken, async (req, res) => {
+    try {
+      await db.collection("posts").doc(req.params.id).delete();
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting post:", error);
+      res.status(500).json({ message: "게시글 삭제 중 오류가 발생했습니다." });
+    }
   });
 
   // Vite middleware for development
