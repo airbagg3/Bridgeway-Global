@@ -2,7 +2,10 @@ import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import Database from "better-sqlite3";
-import jwt from "jsonwebtoken";
+import * as jwtModule from "jsonwebtoken";
+const jwt: any = (jwtModule as any).default || jwtModule;
+const sign = jwt.sign;
+const verify = jwt.verify;
 import cookieParser from "cookie-parser";
 
 const db = new Database("database.sqlite");
@@ -49,7 +52,7 @@ async function startServer() {
     const token = req.cookies.admin_token;
     if (!token) return res.status(401).json({ message: "인증이 필요합니다." });
 
-    jwt.verify(token, JWT_SECRET, (err: any, user: any) => {
+    verify(token, JWT_SECRET, (err: any, user: any) => {
       if (err) return res.status(403).json({ message: "유효하지 않은 토큰입니다." });
       req.user = user;
       next();
@@ -58,22 +61,48 @@ async function startServer() {
 
   // API Routes
   app.post("/api/admin/login", (req, res) => {
-    const { password } = req.body;
-    const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
-    
-    if (password === adminPassword) {
-      const token = jwt.sign({ admin: true }, JWT_SECRET, { expiresIn: "24h" });
+    try {
+      console.log("Login request received. Body:", JSON.stringify(req.body));
+      const { password } = req.body || {};
       
-      res.cookie("admin_token", token, {
-        httpOnly: true,
-        secure: true,
-        sameSite: "none",
-        maxAge: 24 * 60 * 60 * 1000 // 24 hours
+      if (!password) {
+        console.log("No password provided in request body");
+        return res.status(400).json({ success: false, message: "비밀번호를 입력해주세요." });
+      }
+
+      const adminPassword = process.env.ADMIN_PASSWORD || "admin123";
+      console.log("Comparing passwords...");
+      
+      if (password === adminPassword) {
+        console.log("Password match. Signing token...");
+        
+        if (typeof sign !== 'function') {
+          throw new Error("JWT sign function not found. jwt type: " + typeof jwt);
+        }
+
+        const token = sign({ admin: true }, JWT_SECRET, { expiresIn: "24h" });
+        
+        console.log("Token signed. Setting cookie...");
+        res.cookie("admin_token", token, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "none",
+          maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        });
+        
+        console.log("Login successful");
+        res.json({ success: true });
+      } else {
+        console.log("Password mismatch");
+        res.status(401).json({ success: false, message: "비밀번호가 일치하지 않습니다." });
+      }
+    } catch (error) {
+      console.error("CRITICAL: Login route error:", error);
+      res.status(500).json({ 
+        success: false, 
+        message: "서버 내부 오류가 발생했습니다.",
+        debug: process.env.NODE_ENV !== 'production' ? String(error) : undefined
       });
-      
-      res.json({ success: true });
-    } else {
-      res.status(401).json({ success: false, message: "비밀번호가 일치하지 않습니다." });
     }
   });
 
@@ -90,7 +119,7 @@ async function startServer() {
     const token = req.cookies.admin_token;
     if (!token) return res.json({ authenticated: false });
 
-    jwt.verify(token, JWT_SECRET, (err: any) => {
+    verify(token, JWT_SECRET, (err: any) => {
       if (err) return res.json({ authenticated: false });
       res.json({ authenticated: true });
     });
